@@ -137,3 +137,5 @@ Clash Verge、Meta TUN 或其他代理可以保持开启。登录器不应要求
 D:\Warehouse\campus-net-login\scripts\start-mvp.ps1
 
 如果桌面快捷方式被删除，也可以双击仓库根目录的 start-campus-link.cmd 恢复使用。
+
+启动器会先检查 diagnostics/mvp-port.json 中的本地服务；重复双击桌面快捷方式时会复用正在运行的服务，不会重复创建 Node 进程。

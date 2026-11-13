@@ -19,6 +19,17 @@ function Get-HealthUrl {
     return $null
 }
 
+if ($actualPort -eq 0 -and (Test-Path -LiteralPath $portFile)) {
+    try {
+        $portInfo = Get-Content -LiteralPath $portFile -Raw | ConvertFrom-Json
+        if ([int]$portInfo.port -gt 0) {
+            $actualPort = [int]$portInfo.port
+        }
+    } catch {
+        $actualPort = 0
+    }
+}
+
 $healthUrl = Get-HealthUrl
 if ($healthUrl) {
     try {
@@ -30,6 +41,7 @@ if ($healthUrl) {
 }
 
 if (-not $running) {
+    $actualPort = $Port
     Start-Process -FilePath $node.Source -ArgumentList @($server, "--port", "$Port") -WorkingDirectory $root -WindowStyle Hidden | Out-Null
 
     for ($i = 0; $i -lt 24; $i++) {
