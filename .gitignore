@@ -1,0 +1,19 @@
+# Local diagnostics and secrets
+diagnostics/*
+!.gitkeep
+*.env
+*.secret
+*.credentials
+
+# Python and local tooling
+__pycache__/
+.venv/
+venv/
+*.py[cod]
+.pytest_cache/
+
+# Windows/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
