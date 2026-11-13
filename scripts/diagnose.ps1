@@ -7,6 +7,18 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Get-ActualSsid {
+    $lines = @(& netsh wlan show interfaces 2>$null | ForEach-Object { "$_" })
+
+    foreach ($line in $lines) {
+        if ($line -match "^\s*SSID\s*:\s*(.+?)\s*$") {
+            return $Matches[1].Trim()
+        }
+    }
+
+    return $null
+}
+
 function Remove-QueryString {
     param([string]$Line)
 
@@ -20,13 +32,7 @@ function Remove-QueryString {
 function Invoke-CurlProbe {
     param([bool]$NoProxy)
 
-    $curlArgs = @(
-        "-i",
-        "--silent",
-        "--show-error",
-        "--max-time",
-        "10"
-    )
+    $curlArgs = @("-i", "--silent", "--show-error", "--max-time", "10")
 
     if ($NoProxy) {
         $curlArgs += @("--noproxy", "*")
@@ -49,17 +55,7 @@ function Invoke-CurlProbe {
 }
 
 function Get-ProxyProcesses {
-    $names = @(
-        "clash",
-        "clash-verge",
-        "clash-verge-service",
-        "mihomo",
-        "verge-mihomo",
-        "v2ray",
-        "nekoray",
-        "sing-box",
-        "surge"
-    )
+    $names = @("clash", "clash-verge", "clash-verge-service", "mihomo", "verge-mihomo", "v2ray", "nekoray", "sing-box", "surge")
 
     return @(
         Get-Process -ErrorAction SilentlyContinue |
@@ -73,16 +69,11 @@ $wifiProfile = $profiles |
     Where-Object { $_.InterfaceAlias -match "WLAN|Wi-Fi|无线" } |
     Select-Object -First 1
 
+$actualSsid = Get-ActualSsid
 $wifiAlias = if ($wifiProfile) { $wifiProfile.InterfaceAlias } else { $null }
-$ipConfig = if ($wifiAlias) {
-    Get-NetIPConfiguration -InterfaceAlias $wifiAlias -ErrorAction SilentlyContinue
-} else {
-    $null
-}
+$ipConfig = if ($wifiAlias) { Get-NetIPConfiguration -InterfaceAlias $wifiAlias -ErrorAction SilentlyContinue } else { $null }
 
-$internetSettings = Get-ItemProperty `
-    "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" `
-    -ErrorAction SilentlyContinue
+$internetSettings = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -ErrorAction SilentlyContinue
 
 $proxyEnvironment = @(
     Get-ChildItem Env: |
@@ -96,19 +87,13 @@ $proxyEnvironment = @(
 )
 
 $defaultRoutes = @(
-    Get-NetRoute `
-        -AddressFamily IPv4 `
-        -DestinationPrefix "0.0.0.0/0" `
-        -ErrorAction SilentlyContinue |
+    Get-NetRoute -AddressFamily IPv4 -DestinationPrefix "0.0.0.0/0" -ErrorAction SilentlyContinue |
         Select-Object InterfaceAlias, NextHop, RouteMetric, PolicyStore
 )
 
 $dhcpEnabled = $null
 if ($wifiAlias) {
-    $ipInterface = Get-NetIPInterface `
-        -InterfaceAlias $wifiAlias `
-        -AddressFamily IPv4 `
-        -ErrorAction SilentlyContinue
+    $ipInterface = Get-NetIPInterface -InterfaceAlias $wifiAlias -AddressFamily IPv4 -ErrorAction SilentlyContinue
 
     if ($ipInterface) {
         $dhcpEnabled = "$($ipInterface.Dhcp)"
@@ -116,15 +101,16 @@ if ($wifiAlias) {
 }
 
 $result = [ordered]@{
-    schema_version = "0.1"
+    schema_version = "0.2"
     captured_at_utc = (Get-Date).ToUniversalTime().ToString("o")
     target_ssid = $TargetSsid
     current_wifi = [ordered]@{
-        ssid = if ($wifiProfile) { $wifiProfile.Name } else { $null }
+        ssid = if ($actualSsid) { $actualSsid } elseif ($wifiProfile) { $wifiProfile.Name } else { $null }
+        profile_name = if ($wifiProfile) { $wifiProfile.Name } else { $null }
         interface_alias = $wifiAlias
         ipv4_connectivity = if ($wifiProfile) { "$($wifiProfile.IPv4Connectivity)" } else { $null }
         ipv6_connectivity = if ($wifiProfile) { "$($wifiProfile.IPv6Connectivity)" } else { $null }
-        target_matches = if ($TargetSsid) { [bool]($wifiProfile -and $wifiProfile.Name -eq $TargetSsid) } else { $null }
+        target_matches = if ($TargetSsid) { [bool]($actualSsid -and $actualSsid -eq $TargetSsid) } else { $null }
     }
     ip = [ordered]@{
         addresses = if ($ipConfig) { @($ipConfig.IPv4Address | ForEach-Object { $_.IPAddress }) } else { @() }
@@ -161,3 +147,4 @@ $result | ConvertTo-Json -Depth 10 | Set-Content -Encoding UTF8 $outputFullPath
 
 Write-Output ($result | ConvertTo-Json -Depth 10)
 Write-Output "Saved diagnostic report to: $outputFullPath"
+
