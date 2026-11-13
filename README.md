@@ -75,7 +75,7 @@ Clash Verge、Meta TUN 或其他代理可以保持开启。登录器不应要求
 
 ## 运行前端 MVP
 
-在 PowerShell 中运行：
+最简单的方式是双击仓库根目录的start-campus-link.cmd。也可以在 PowerShell 中运行：
 
 1. 进入 D:\Warehouse\campus-net-login
 2. 执行 .\scripts\start-mvp.ps1
@@ -90,4 +90,6 @@ Clash Verge、Meta TUN 或其他代理可以保持开启。登录器不应要求
 - 展示 SSID、DHCP、网关、代理、直连和代理探测结果
 
 密码只在本次请求的内存中使用，不写入浏览器存储、日志或 Git。前端服务只监听本机 127.0.0.1。
+
+
 
