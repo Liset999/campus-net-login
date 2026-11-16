@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Sandboxed unit & integration tests for scripts/fix_net.sh using mocked macOS tools.
+# Sandboxed unit & integration tests for scripts/fix_net.command using mocked macOS tools.
 
 set -e
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-TARGET="$REPO_DIR/scripts/fix_net.sh"
+TARGET="$REPO_DIR/scripts/fix_net.command"
 
 TMP_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TMP_ROOT"' EXIT
@@ -191,8 +191,12 @@ EOF
 cat > "$MOCK_BIN/dscacheutil" <<'EOF'
 #!/usr/bin/env bash
 echo "dscacheutil $*" >> "$MOCK_CALL_LOG"
-if [[ "$1" == "-q" && -f "$MOCK_STATE_DIR/fake_ip" ]]; then
-    printf 'name: captive.apple.com\nip_address: 28.0.0.35\n'
+if [[ "$1" == "-q" ]]; then
+    if [[ -f "$MOCK_STATE_DIR/fake_ip" ]]; then
+        printf 'name: captive.apple.com\nip_address: 28.0.0.35\n'
+    else
+        printf 'name: captive.apple.com\nip_address: 17.253.144.10\n'
+    fi
 fi
 EOF
 
@@ -310,7 +314,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 if [[ "$url" == *"captive.apple.com"* ]]; then
-    if [[ -f "$MOCK_STATE_DIR/portal_stall" ]]; then
+    if [[ -f "$MOCK_STATE_DIR/portal_stall" || -f "$MOCK_STATE_DIR/portal_redirect" ]]; then
         printf 'HTTP/1.1 302 Found\r\nLocation: http://10.162.255.1/login\r\n\r\n' > "$hdr"
         printf '302'
         exit 0
@@ -321,6 +325,10 @@ if [[ "$url" == *"captive.apple.com"* ]]; then
     exit 0
 fi
 if [[ "$url" == "http://10.162.255.1/login" ]]; then
+    if [[ -f "$MOCK_STATE_DIR/portal_redirect" ]]; then
+        printf '200'
+        exit 0
+    fi
     printf '000'
     exit 28
 fi
@@ -355,8 +363,6 @@ assert_contains() {
 
 echo "[Test 1] bash -n syntax check"
 /bin/bash -n "$TARGET"
-/bin/bash -n "$REPO_DIR/scripts/fix_net.command"
-/bin/bash -n "$REPO_DIR/scripts/diagnose_net.command"
 
 echo "[Test 2] --status and --dry-run (non-root)"
 export MOCK_UID=501
@@ -366,11 +372,11 @@ assert_contains "$status_out" "网卡接口：en0" "status device"
 dry_out="$(/bin/bash "$TARGET" --dry-run --reset-dns)"
 assert_contains "$dry_out" "networksetup -setdnsservers \"Wi-Fi\" Empty" "dry-run reset-dns"
 
-echo "[Test 3] full repair flow (proxies off & cleared, DNS, ARP permanent skip, DHCP bound)"
+echo "[Test 3] full repair flow (--fix: proxies off & cleared, DNS, ARP permanent skip, DHCP bound)"
 export MOCK_UID=0
 touch "$MOCK_STATE_DIR/manual_ip"
 : > "$LOG_FILE"
-run_out="$(/bin/bash "$TARGET" --no-startup-prompt --reset-dns)"
+run_out="$(/bin/bash "$TARGET" --fix --no-startup-prompt --reset-dns)"
 assert_contains "$run_out" "[完成] 系统代理已关闭（已覆盖 3 个启用服务）" "disable proxies"
 assert_contains "$run_out" "[完成] 代理地址和 PAC 已清理" "clear proxies"
 assert_contains "$run_out" "[完成] DNS 缓存已刷新" "flush dns"
@@ -383,19 +389,19 @@ assert_contains "$(cat "$STATE_DIR/webproxy_Wi-Fi")" "Enabled: No" "webproxy sta
 assert_contains "$(cat "$STATE_DIR/autoproxy_Wi-Fi")" "Enabled: No" "autoproxy stays off after clear"
 assert_contains "$(cat "$LOG_FILE")" "networksetup -setwebproxystate EnAgent-VPN off" "secondary service cleared"
 
-echo "[Test 4] --install-desktop creates standalone fix_net.command and diagnose_net.command"
+echo "[Test 4] --install-desktop creates standalone fix_net.command and cleans old diagnose_net.command"
 export MOCK_UID=501
+touch "$HOME_DIR/Desktop/diagnose_net.command"
 desk_out="$(/bin/bash "$TARGET" --install-desktop)"
 assert_contains "$desk_out" "$HOME_DIR/Desktop/fix_net.command" "desktop output"
-assert_contains "$desk_out" "$HOME_DIR/Desktop/diagnose_net.command" "desktop diagnose output"
 [[ -x "$HOME_DIR/Desktop/fix_net.command" ]]
-[[ -x "$HOME_DIR/Desktop/diagnose_net.command" ]]
+[[ ! -e "$HOME_DIR/Desktop/diagnose_net.command" ]]
 
 echo "[Test 5] --install-startup, --startup on inactive link, and --remove-startup"
 export MOCK_UID=0
 /bin/bash "$TARGET" --install-startup >/dev/null
 [[ -f "$DAEMONS_DIR/com.campus-net-login.fix-net.plist" ]]
-[[ -x "$SUPPORT_DIR/fix_net.sh" ]]
+[[ -x "$SUPPORT_DIR/fix_net.command" ]]
 assert_contains "$(cat "$DAEMONS_DIR/com.campus-net-login.fix-net.plist")" "<string>--startup</string>" "plist startup flag"
 
 touch "$MOCK_STATE_DIR/link_inactive"
@@ -410,7 +416,7 @@ assert_contains "$rm_out" "已移除开机启动" "remove startup"
 echo "[Test 6] link-local 169.254.x.x returns non-zero with --hard hint"
 touch "$MOCK_STATE_DIR/bad_ip"
 set +e
-bad_out="$(/bin/bash "$TARGET" --no-startup-prompt)"
+bad_out="$(/bin/bash "$TARGET" --fix --no-startup-prompt)"
 bad_rc=$?
 set -e
 [[ "$bad_rc" -eq 1 ]]
@@ -435,5 +441,13 @@ assert_contains "$diag_out" "认证服务器响应超时/卡死" "diagnose porta
 assert_contains "$diag_out" "assuming online" "diagnose log assuming online"
 [[ -s "$report_file" ]]
 rm -f "$MOCK_STATE_DIR/portal_stall"
+
+echo "[Test 9] default auto mode prints login URL without root when local network is clean"
+export MOCK_UID=501
+touch "$MOCK_STATE_DIR/portal_redirect"
+auto_out="$(/bin/bash "$TARGET" --no-pause)"
+assert_contains "$auto_out" "检测到校园网登录地址：" "auto portal header"
+assert_contains "$auto_out" "http://10.162.255.1/login" "auto portal url"
+rm -f "$MOCK_STATE_DIR/portal_redirect"
 
 echo "ALL TESTS PASSED"
